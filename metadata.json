@@ -1,0 +1,6 @@
+{
+  "name": "Kalyani Hospital CMS",
+  "description": "A comprehensive clinic management system with voice-powered prescriptions, patient records, and analytics dashboard.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": []
+}

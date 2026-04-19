@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "Patient": {
+      "title": "Patient",
+      "description": "Information about a patient",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string", "description": "Unique identifier" },
+        "age": { "type": "integer" },
+        "gender": { "type": "string", "enum": ["Male", "Female", "Other"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone"]
+    },
+    "Visit": {
+      "title": "Visit",
+      "description": "A single clinical visit record",
+      "type": "object",
+      "properties": {
+        "patientPhone": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "symptoms": { "type": "string" },
+        "diagnosis": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["patientPhone", "date"]
+    },
+    "Prescription": {
+      "title": "Prescription",
+      "description": "Medical prescription issued during a visit",
+      "type": "object",
+      "properties": {
+        "visitId": { "type": "string" },
+        "patientPhone": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "medicines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "dosage": { "type": "string" },
+              "frequency": { "type": "string" },
+              "duration": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["visitId", "patientPhone"]
+    }
+  },
+  "firestore": {
+    "/patients/{phone}": {
+      "schema": "Patient",
+      "description": "Collection of patient records keyed by phone"
+    },
+    "/visits/{visitId}": {
+      "schema": "Visit",
+      "description": "Collection of clinical visits"
+    },
+    "/prescriptions/{prescriptionId}": {
+      "schema": "Prescription",
+      "description": "Collection of medical prescriptions"
+    }
+  }
+}

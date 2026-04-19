@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isValidId(id) {
+      return id is string && id.size() >= 5 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-\\+]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+    
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validations ---
+
+    function isValidPatient(data) {
+      return data.keys().hasAll(['name', 'phone', 'age', 'gender', 'createdAt', 'creatorId'])
+        && data.keys().size() == 6
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15
+        && data.age is int && data.age >= 0 && data.age <= 150
+        && data.gender in ['Male', 'Female', 'Other']
+        && data.createdAt is string
+        && data.creatorId == request.auth.uid;
+    }
+
+    function isValidVisit(data) {
+      return data.keys().hasAll(['patientPhone', 'date', 'symptoms', 'diagnosis', 'creatorId'])
+        && data.keys().size() == 5
+        && data.patientPhone is string && data.patientPhone.size() >= 10
+        && data.date is string
+        && data.symptoms is string && data.symptoms.size() <= 5000
+        && data.diagnosis is string && data.diagnosis.size() <= 5000
+        && data.creatorId == request.auth.uid;
+    }
+
+    function isValidPrescription(data) {
+      return data.keys().hasAll(['visitId', 'patientPhone', 'date', 'medicines', 'creatorId'])
+        && data.keys().size() == 5
+        && data.visitId is string
+        && data.patientPhone is string
+        && data.date is string
+        && data.medicines is list && data.medicines.size() <= 50
+        && data.creatorId == request.auth.uid;
+    }
+
+    // --- Rules ---
+
+    match /patients/{phone} {
+      allow get: if isSignedIn() && isValidId(phone);
+      allow list: if isSignedIn() && resource.data.creatorId == request.auth.uid;
+      
+      allow create: if isSignedIn() 
+        && isValidId(phone)
+        && isValidPatient(incoming())
+        && incoming().phone == phone;
+        
+      allow update: if isSignedIn()
+        && isValidId(phone)
+        && isValidPatient(incoming())
+        && incoming().phone == existing().phone
+        && incoming().createdAt == existing().createdAt
+        && (
+          // Action: Profile Update
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'age', 'gender'])
+        );
+        
+      allow delete: if false;
+    }
+
+    match /visits/{visitId} {
+      allow get: if isSignedIn() && isValidId(visitId);
+      allow list: if isSignedIn() && resource.data.creatorId == request.auth.uid;
+      
+      allow create: if isSignedIn()
+        && isValidId(visitId)
+        && isValidVisit(incoming())
+        && exists(/databases/$(database)/documents/patients/$(incoming().patientPhone));
+        
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /prescriptions/{prescriptionId} {
+      allow get: if isSignedIn() && isValidId(prescriptionId);
+      allow list: if isSignedIn() && resource.data.creatorId == request.auth.uid;
+      
+      allow create: if isSignedIn()
+        && isValidId(prescriptionId)
+        && isValidPrescription(incoming())
+        && exists(/databases/$(database)/documents/visits/$(incoming().visitId));
+        
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}
