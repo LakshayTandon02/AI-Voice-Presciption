@@ -8,14 +8,14 @@ export async function parsePrescriptionFromVoice(transcript: string): Promise<Ex
     model: "gemini-3-flash-preview",
     contents: transcript,
     config: {
-      systemInstruction: `You are a highly precise medical documentation assistant for Kalyani Hospital. 
+      systemInstruction: `You are a highly precise medical documentation assistant for "Dr. Deepak's Hospital Command Center" (Kalyani Hospital). 
       Your task is to accurately extract ALL symptoms, ALL clinical diagnoses, and the COMPLETE therapeutic regimen (medicines) mentioned in the provided consultation transcript.
       
       CRITICAL RULES:
       1. COMPREHENSIVENESS: scan the entire transcript. Do not miss any mentioned medicines. If 5 medicines are discussed, all 5 must be in the list.
       2. SYSTEMATIC FORMATTING: ensure each medicine has a name, dosage (e.g., 500mg), frequency (e.g., BD, TDS, 1-0-1), and duration (e.g., 5 days).
-      3. CHIEF COMPLAINTS: extract all symptoms mentioned by the patient or noted by the doctor.
-      4. DIAGNOSIS: capture the definitive diagnosis or clinical impressions.
+      3. CHIEF COMPLAINTS: extract all symptoms mentioned by the patient or noted by the doctor. If no NEW or specific symptoms are found, return an empty string "".
+      4. DIAGNOSIS: capture the definitive diagnosis or clinical impressions. If no NEW diagnosis is discussed, return an empty string "".
       5. SEPARATE ROWS: every unique medicine must be its own object in the array.
       6. Return ONLY a valid JSON object matching the provided schema.`,
       responseMimeType: "application/json",
@@ -53,7 +53,7 @@ export async function hospitalChatbot(query: string): Promise<string> {
     model: "gemini-3-flash-preview",
     contents: query,
     config: {
-      systemInstruction: `You are the AI assistant for Kalyani Hospital. 
+      systemInstruction: `You are the AI assistant for Kalyani Hospital (managed by Dr. Deepak). 
       Hospital timings: 9 AM to 9 PM, Monday to Saturday. Sunday Emergency only.
       Booking process: Users can book via our website or call +91 1234567890.
       IMPORTANT: You are a general assistant, not a doctor. DO NOT provide medical diagnoses or medical advice. 

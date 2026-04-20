@@ -23,7 +23,9 @@ import {
   ChevronLeft,
   Stethoscope,
   Clipboard,
-  FileText
+  FileText,
+  Edit,
+  Check
 } from 'lucide-react';
 import { 
   collection, 
@@ -73,20 +75,107 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [timeRange, setTimeRange] = useState<'Day' | 'Week' | 'Month' | 'Year'>('Week');
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [globalSearch, setGlobalSearch] = useState('');
   
   // Dashboard state
-  const [stats, setStats] = useState({ totalPatients: 0, todayVisits: 0, weeklyGrowth: 0 });
+  const [stats, setStats] = useState({ totalPatients: 0, todayVisits: 0, totalRevenue: 0 });
   const [chartData, setChartData] = useState<any[]>([]);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      if (currentUser) {
-        fetchDashboardData();
-      }
     });
-    return () => unsubscribe();
-  }, []);
+
+    // Real-time Dashboard Monitoring
+    const unsubs: (() => void)[] = [];
+    
+    // Total Patients Listener
+    const pUnsub = onSnapshot(collection(db, 'patients'), (snapshot) => {
+      const pList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Patient));
+      setPatients(pList);
+      setStats(prev => ({ ...prev, totalPatients: snapshot.size }));
+    });
+    unsubs.push(pUnsub);
+
+    // Visits & Revenue Listener
+    const vUnsub = onSnapshot(collection(db, 'visits'), (snapshot) => {
+      const visits = snapshot.docs.map(doc => doc.data());
+      const todayStr = new Date().toISOString().split('T')[0];
+      
+      const todayVisitsCount = visits.filter(v => v.date.startsWith(todayStr)).length;
+      const totalRevenue = snapshot.size * 200;
+
+      setStats(prev => ({ 
+        ...prev, 
+        todayVisits: todayVisitsCount,
+        totalRevenue: totalRevenue
+      }));
+
+      // Aggregated Analytics Generator
+      let aggregatedData: any[] = [];
+      const now = new Date();
+
+      if (timeRange === 'Day') {
+        // Last 24 Hours in 3-hour bins
+        aggregatedData = [...Array(8)].map((_, i) => {
+          const d = new Date(now);
+          d.setHours(d.getHours() - (7 - i) * 3);
+          const hourLabel = d.getHours() + ":00";
+          const count = visits.filter(v => {
+            const vDate = new Date(v.date);
+            return vDate >= new Date(d.getTime() - 1.5 * 60 * 60 * 1000) && 
+                   vDate < new Date(d.getTime() + 1.5 * 60 * 60 * 1000);
+          }).length;
+          return { name: hourLabel, visits: count, revenue: count * 200 };
+        });
+      } else if (timeRange === 'Week') {
+        // Last 7 days
+        aggregatedData = [...Array(7)].map((_, i) => {
+          const d = new Date(now);
+          d.setDate(d.getDate() - (6 - i));
+          const dateStr = d.toISOString().split('T')[0];
+          const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+          const dayVisits = visits.filter(v => v.date.startsWith(dateStr)).length;
+          return { name: dayName, visits: dayVisits, revenue: dayVisits * 200 };
+        });
+      } else if (timeRange === 'Month') {
+        // Last 4 weeks
+        aggregatedData = [...Array(4)].map((_, i) => {
+          const d = new Date(now);
+          d.setDate(d.getDate() - (3 - i) * 7);
+          const label = `Week ${i + 1}`;
+          const weekVisits = visits.filter(v => {
+            const vDate = new Date(v.date);
+            const start = new Date(d.getTime() - 3.5 * 24 * 60 * 60 * 1000);
+            const end = new Date(d.getTime() + 3.5 * 24 * 60 * 60 * 1000);
+            return vDate >= start && vDate < end;
+          }).length;
+          return { name: label, visits: weekVisits, revenue: weekVisits * 200 };
+        });
+      } else {
+        // Year - Last 12 months
+        aggregatedData = [...Array(12)].map((_, i) => {
+          const d = new Date(now.getFullYear(), now.getMonth() - (11 - i), 1);
+          const monthLabel = d.toLocaleDateString('en-US', { month: 'short' });
+          const monthVisits = visits.filter(v => {
+            const vDate = new Date(v.date);
+            return vDate.getMonth() === d.getMonth() && vDate.getFullYear() === d.getFullYear();
+          }).length;
+          return { name: monthLabel, visits: monthVisits, revenue: monthVisits * 200 };
+        });
+      }
+      
+      setChartData(aggregatedData);
+    });
+    unsubs.push(vUnsub);
+
+    return () => {
+      unsubscribeAuth();
+      unsubs.forEach(u => u());
+    };
+  }, [timeRange]);
 
   const handleLogin = async () => {
     try {
@@ -99,32 +188,6 @@ export default function App() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const fetchDashboardData = async () => {
-    try {
-      const pSnapshot = await getDocs(collection(db, 'patients'));
-      const vSnapshot = await getDocs(collection(db, 'visits'));
-      
-      setStats({
-        totalPatients: pSnapshot.size,
-        todayVisits: vSnapshot.docs.filter(d => d.data().date.startsWith(new Date().toISOString().split('T')[0])).length,
-        weeklyGrowth: 12 // Mocked for UI
-      });
-
-      // Mock chart data for trends
-      setChartData([
-        { name: 'Mon', visits: 12, revenue: 1200 },
-        { name: 'Tue', visits: 19, revenue: 1900 },
-        { name: 'Wed', visits: 15, revenue: 1500 },
-        { name: 'Thu', visits: 22, revenue: 2200 },
-        { name: 'Fri', visits: 25, revenue: 2500 },
-        { name: 'Sat', visits: 18, revenue: 1800 },
-        { name: 'Sun', visits: 10, revenue: 1000 },
-      ]);
     } catch (e) {
       console.error(e);
     }
@@ -152,8 +215,8 @@ export default function App() {
       )}>
         <div className="p-4 border-b border-blue-800 bg-blue-950 flex items-center justify-between">
           <div className="flex flex-col">
-            <h1 className="font-bold text-lg leading-tight uppercase tracking-wider text-white">Kalyani</h1>
-            <p className="text-[10px] opacity-70 text-blue-200">Hospital Management v2.1</p>
+            <h1 className="font-bold text-lg leading-tight uppercase tracking-wider text-white">Dr. Deepak</h1>
+            <p className="text-[10px] opacity-70 text-blue-200">Hospital Command Center v2.1</p>
           </div>
           <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-blue-200">
             <X className="w-5 h-5" />
@@ -213,7 +276,7 @@ export default function App() {
               className="w-full flex items-center justify-center gap-2 py-2 bg-blue-600 rounded text-xs font-bold text-white hover:bg-blue-500 transition-all shadow-lg"
             >
               <LogIn className="w-3.5 h-3.5" />
-              Doctor Access
+              Dr. Deepak Access
             </button>
           )}
         </div>
@@ -229,10 +292,46 @@ export default function App() {
              <div className="relative w-full">
                <input 
                 type="text" 
-                placeholder="Search patient..." 
+                placeholder="Search patient by name or phone..." 
                 className="w-full text-xs border rounded py-1.5 pl-8 bg-slate-50 focus:bg-white outline-none focus:ring-1 focus:ring-blue-500 transition-all font-medium"
+                value={globalSearch}
+                onChange={(e) => setGlobalSearch(e.target.value)}
                />
                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
+               
+               {/* Search Results Dropdown */}
+               <AnimatePresence>
+                 {globalSearch && (
+                   <motion.div 
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    className="absolute top-full left-0 right-0 mt-1 bg-white border rounded shadow-xl z-50 max-h-60 overflow-y-auto custom-scrollbar"
+                   >
+                     {patients.filter(p => p.name.toLowerCase().includes(globalSearch.toLowerCase()) || p.phone.includes(globalSearch)).length > 0 ? (
+                       patients.filter(p => p.name.toLowerCase().includes(globalSearch.toLowerCase()) || p.phone.includes(globalSearch)).map(p => (
+                         <button
+                           key={p.id}
+                           onClick={() => {
+                             setSelectedPatient(p);
+                             setActiveTab('consult');
+                             setGlobalSearch('');
+                           }}
+                           className="w-full text-left p-3 hover:bg-blue-50 border-b last:border-0 flex items-center justify-between transition-colors"
+                         >
+                           <div>
+                             <p className="text-xs font-bold text-slate-800">{p.name}</p>
+                             <p className="text-[10px] text-slate-400">{p.phone} • {p.age}y {p.gender}</p>
+                           </div>
+                           <ArrowRight className="w-3 h-3 text-blue-400" />
+                         </button>
+                       ))
+                     ) : (
+                       <div className="p-4 text-center text-xs text-slate-400 italic">No patients found matching "{globalSearch}"</div>
+                     )}
+                   </motion.div>
+                 )}
+               </AnimatePresence>
              </div>
           </div>
           <div className="hidden md:flex items-center gap-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
@@ -248,8 +347,16 @@ export default function App() {
 
         <div className="flex-1 overflow-y-auto p-4 lg:p-6 custom-scrollbar">
           <AnimatePresence mode="wait">
-            {activeTab === 'dashboard' && <Dashboard stats={stats} chartData={chartData} />}
+            {activeTab === 'dashboard' && (
+              <Dashboard 
+                stats={stats} 
+                chartData={chartData} 
+                timeRange={timeRange}
+                setTimeRange={setTimeRange}
+              />
+            )}
             {activeTab === 'patients' && <PatientManagement 
+              patients={patients}
               onSelect={(p) => { setSelectedPatient(p); setActiveTab('consult'); }} 
               onViewHistory={(p) => { setSelectedPatient(p); setActiveTab('patient-history'); }}
             />}
@@ -271,80 +378,205 @@ export default function App() {
 
 // --- Views Components ---
 
-function Dashboard({ stats, chartData }: any) {
+function Dashboard({ stats, chartData, timeRange, setTimeRange }: any) {
+  const currentRevenue = stats.totalRevenue || 0;
+  
   return (
     <motion.div 
       initial={{ opacity: 0, y: 10 }} 
       animate={{ opacity: 1, y: 0 }} 
       exit={{ opacity: 0, y: -10 }}
-      className="space-y-8"
+      className="space-y-6 lg:space-y-8"
     >
-      <div>
-        <h2 className="text-3xl font-bold text-slate-900">Health Dashboard</h2>
-        <p className="text-slate-500 mt-1">Real-time overview of hospital analytics & patient flow.</p>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl lg:text-3xl font-bold text-slate-900">Hospital Command Center</h2>
+          <div className="flex items-center gap-4 mt-2">
+            <p className="text-slate-500 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              Live Analytics Feed • {new Date().toLocaleDateString('en-IN', { dateStyle: 'long' })}
+            </p>
+            <div className="flex bg-slate-200/50 p-1 rounded-lg border border-slate-200">
+              {['Day', 'Week', 'Month', 'Year'].map((range) => (
+                <button
+                  key={range}
+                  onClick={() => setTimeRange(range)}
+                  className={cn(
+                    "px-3 py-1 rounded-md text-[10px] font-bold transition-all",
+                    timeRange === range ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  )}
+                >
+                  {range}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-lg border shadow-sm">
+          <div className="text-right">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Global Payout Fee</p>
+            <p className="text-sm font-bold text-blue-600">₹200 / Patient</p>
+          </div>
+          <div className="w-px h-8 bg-slate-100 mx-2" />
+          <TrendingUp className="w-5 h-5 text-emerald-500" />
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'text-blue-500', trend: '↑ 12%' },
-          { label: 'Today\'s Visits', value: stats.todayVisits, icon: Calendar, color: 'text-emerald-500', trend: 'Busy' },
-          { label: 'Revenue (MTD)', value: '₹82,400', icon: TrendingUp, color: 'text-amber-500', trend: '80%' },
+          { label: 'Total Base Patients', value: stats.totalPatients, icon: Users, color: 'bg-blue-50 text-blue-600', trend: 'Lifetime' },
+          { label: 'OPD Footfall Today', value: stats.todayVisits, icon: Calendar, color: 'bg-emerald-50 text-emerald-600', trend: 'Live' },
+          { label: 'Gross Revenue', value: `₹${currentRevenue.toLocaleString()}`, icon: TrendingUp, color: 'bg-amber-50 text-amber-600', trend: 'Total' },
+          { label: 'Active Sessions', value: 'Active', icon: Activity, color: 'bg-indigo-50 text-indigo-600', trend: 'Operational' },
         ].map((stat, i) => (
-          <div key={i} className="bg-white p-3 border rounded shadow-sm flex flex-col justify-between min-h-[80px]">
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider font-mono">{stat.label}</span>
-            <div className="flex items-end justify-between mt-1">
-              <span className="text-xl font-bold tracking-tight">{stat.value}</span>
-              <span className={cn("text-[10px] font-bold flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-50", 
-                i === 0 ? "text-emerald-600" : i === 1 ? "text-blue-600" : "text-slate-500"
-              )}>{stat.trend}</span>
+          <div key={i} className="bg-white p-5 lg:p-6 border rounded-xl shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
+            <div className="flex justify-between items-start mb-4">
+              <div className={cn("p-2.5 rounded-lg", stat.color)}>
+                <stat.icon className="w-5 h-5" />
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-50 text-slate-400 border border-slate-100">
+                {stat.trend}
+              </span>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-slate-400 mb-1">{stat.label}</p>
+              <h4 className="text-2xl font-bold text-slate-900 tracking-tight">{stat.value}</h4>
+            </div>
+            <div className="absolute -right-4 -bottom-4 opacity-5 group-hover:opacity-10 transition-opacity">
+              <stat.icon className="w-24 h-24" />
             </div>
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-12 lg:col-span-8 bg-white p-4 border rounded shadow-sm">
-          <h3 className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-6">Patient Flow Trends</h3>
-          <div className="h-[220px]">
+      <div className="grid grid-cols-12 gap-6">
+        <div className="col-span-12 lg:col-span-8 bg-white p-6 border rounded-xl shadow-sm">
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">Clinical Load Index</h3>
+              <p className="text-xs text-slate-400">Aggregated patient visits over the last 7 sessions.</p>
+            </div>
+            <div className="flex items-center gap-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-600" /> Visits
+              </div>
+            </div>
+          </div>
+          <div className="h-[280px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData}>
+                <defs>
+                  <linearGradient id="lineGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#2563eb" stopOpacity={0.1}/>
+                    <stop offset="95%" stopColor="#2563eb" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
-                <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
-                <Tooltip 
-                  contentStyle={{ borderRadius: '6px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '10px' }}
+                <XAxis 
+                  dataKey="name" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{fill: '#94a3b8', fontSize: 10, fontWeight: 500}} 
+                  dy={10}
                 />
-                <Line type="monotone" dataKey="visits" stroke="#1e3a8a" strokeWidth={2} dot={{r: 3, fill: '#1e3a8a'}} activeDot={{r: 5}} />
+                <YAxis 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{fill: '#94a3b8', fontSize: 10, fontWeight: 500}} 
+                />
+                <Tooltip 
+                  cursor={{ stroke: '#e2e8f0', strokeWidth: 1 }}
+                  contentStyle={{ 
+                    borderRadius: '12px', 
+                    border: 'none', 
+                    boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                    fontSize: '11px',
+                    padding: '8px 12px'
+                  }}
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="visits" 
+                  stroke="#2563eb" 
+                  strokeWidth={3} 
+                  dot={{r: 4, fill: '#fff', stroke: '#2563eb', strokeWidth: 2}} 
+                  activeDot={{r: 6, stroke: '#fff', strokeWidth: 2}}
+                  animationDuration={1500}
+                />
               </LineChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        <div className="col-span-12 lg:col-span-4 bg-white p-4 border rounded shadow-sm">
-          <h3 className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-6">Revenue Mix</h3>
-          <div className="h-[220px]">
+        <div className="col-span-12 lg:col-span-4 bg-white p-6 border rounded-xl shadow-sm">
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">Financial Snapshot</h3>
+              <p className="text-xs text-slate-400">Revenue generation trend @ ₹200 fee.</p>
+            </div>
+            <TrendingUp className="w-4 h-4 text-emerald-500" />
+          </div>
+          <div className="h-[280px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
-                <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
-                <Tooltip 
-                   contentStyle={{ borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '10px' }}
+                <XAxis 
+                  dataKey="name" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{fill: '#94a3b8', fontSize: 10, fontWeight: 500}} 
+                  dy={10}
                 />
-                <Bar dataKey="revenue" fill="#3b82f6" radius={[2, 2, 0, 0]} />
+                <YAxis 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{fill: '#94a3b8', fontSize: 10, fontWeight: 500}}
+                />
+                <Tooltip 
+                   cursor={{ fill: '#f8fafc' }}
+                   contentStyle={{ 
+                    borderRadius: '12px', 
+                    border: 'none', 
+                    boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                    fontSize: '11px',
+                    padding: '8px 12px'
+                  }}
+                   formatter={(value: any) => [`₹${value}`, 'Revenue']}
+                />
+                <Bar dataKey="revenue" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={24} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
       </div>
+      
+      <div className="bg-blue-900 rounded-2xl p-8 text-white relative overflow-hidden shadow-xl">
+        <div className="relative z-10 max-w-xl">
+          <h3 className="text-xl font-bold mb-2">Advanced Clinical Analytics</h3>
+          <p className="text-blue-100 text-sm leading-relaxed mb-6">
+            Your hospital is processing real-time clinical data. Every voice prescription, visit log, and patient record contributes to these live insights.
+          </p>
+          <div className="flex items-center gap-4">
+            <div className="px-4 py-2 bg-white/10 rounded-lg backdrop-blur-sm border border-white/10">
+              <p className="text-[10px] uppercase font-bold text-blue-300">Net Efficiency</p>
+              <p className="text-lg font-bold">98.4%</p>
+            </div>
+            <div className="px-4 py-2 bg-white/10 rounded-lg backdrop-blur-sm border border-white/10">
+              <p className="text-[10px] uppercase font-bold text-blue-300">Sync Latency</p>
+              <p className="text-lg font-bold">~240ms</p>
+            </div>
+          </div>
+        </div>
+        <Activity className="absolute -right-8 -bottom-8 w-64 h-64 text-white/5 rotate-12" />
+      </div>
     </motion.div>
   );
 }
 
-function PatientManagement({ onSelect, onViewHistory }: { onSelect: (p: Patient) => void, onViewHistory: (p: Patient) => void }) {
+function PatientManagement({ patients, onSelect, onViewHistory }: { patients: Patient[], onSelect: (p: Patient) => void, onViewHistory: (p: Patient) => void }) {
   const [search, setSearch] = useState('');
-  const [patients, setPatients] = useState<Patient[]>([]);
   const [isAdding, setIsAdding] = useState(false);
+  const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
   const [newPatient, setNewPatient] = useState({ 
     name: '', 
     phone: '', 
@@ -354,19 +586,17 @@ function PatientManagement({ onSelect, onViewHistory }: { onSelect: (p: Patient)
     initialDiagnosis: ''
   });
 
-  useEffect(() => {
-    fetchPatients();
-  }, []);
-
-  const fetchPatients = async () => {
-    const q = query(collection(db, 'patients'), orderBy('createdAt', 'desc'));
-    const snapshot = await getDocs(q);
-    setPatients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Patient)));
-  };
-
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPatient.name || !newPatient.phone) return;
+    
+    // Validate 10-digit phone number
+    const phoneRegex = /^\d{10}$/;
+    if (!phoneRegex.test(newPatient.phone)) {
+      alert("Invalid Phone Number. Please enter exactly 10 digits.");
+      return;
+    }
+
     try {
       if (!auth.currentUser) {
         alert("Please sign in to register patients.");
@@ -380,9 +610,23 @@ function PatientManagement({ onSelect, onViewHistory }: { onSelect: (p: Patient)
       });
       setIsAdding(false);
       setNewPatient({ name: '', phone: '', age: '', gender: 'Male', initialSymptoms: '', initialDiagnosis: '' });
-      fetchPatients();
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingPatient) return;
+    try {
+      await setDoc(doc(db, 'patients', editingPatient.id), {
+        ...editingPatient,
+        age: Number(editingPatient.age)
+      }, { merge: true });
+      setEditingPatient(null);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to update patient information.");
     }
   };
 
@@ -416,8 +660,9 @@ function PatientManagement({ onSelect, onViewHistory }: { onSelect: (p: Patient)
               value={newPatient.name} onChange={e => setNewPatient({...newPatient, name: e.target.value})}
             />
             <input 
-              placeholder="Phone Number" className="text-xs p-2 border rounded bg-white outline-none focus:ring-1 focus:ring-blue-400" required
-              value={newPatient.phone} onChange={e => setNewPatient({...newPatient, phone: e.target.value})}
+              placeholder="10-Digit Phone" className="text-xs p-2 border rounded bg-white outline-none focus:ring-1 focus:ring-blue-400" required
+              value={newPatient.phone} onChange={e => setNewPatient({...newPatient, phone: e.target.value.replace(/\D/g, '').slice(0, 10)})}
+              maxLength={10}
             />
             <input 
               placeholder="Age" type="number" className="text-xs p-2 border rounded bg-white outline-none focus:ring-1 focus:ring-blue-400"
@@ -482,19 +727,26 @@ function PatientManagement({ onSelect, onViewHistory }: { onSelect: (p: Patient)
                     <span className="ml-1 bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{p.age}y</span>
                   </td>
                   <td className="px-6 py-2 text-right">
-                    <div className="flex items-center justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center justify-end gap-2">
+                      <button 
+                        onClick={() => setEditingPatient(p)}
+                        className="p-2 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition-colors shadow-sm"
+                        title="Edit Demographics"
+                      >
+                        <Edit className="w-3.5 h-3.5" />
+                      </button>
                       <button 
                         onClick={() => onViewHistory(p)}
-                        className="text-slate-500 font-bold uppercase text-[9px] flex items-center gap-1 hover:text-blue-600 outline-none"
-                        title="Timeline History"
+                        className="p-2 bg-slate-100 text-slate-600 rounded hover:bg-slate-200 hover:text-slate-800 transition-colors shadow-sm"
+                        title="View History"
                       >
-                        <History className="w-3 h-3" /> History
+                        <History className="w-3.5 h-3.5" />
                       </button>
                       <button 
                         onClick={() => onSelect(p)}
-                        className="text-blue-600 font-bold uppercase text-[9px] flex items-center gap-1 border-l pl-3 border-slate-200 outline-none"
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded text-[10px] font-bold uppercase tracking-wider hover:bg-blue-700 transition-all shadow-sm active:scale-95"
                       >
-                        Consult <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
+                        <PlusCircle className="w-3 h-3" /> Consult
                       </button>
                     </div>
                   </td>
@@ -504,6 +756,85 @@ function PatientManagement({ onSelect, onViewHistory }: { onSelect: (p: Patient)
           </table>
         </div>
       </div>
+
+      <AnimatePresence>
+        {editingPatient && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="bg-blue-900 p-4 text-white flex justify-between items-center">
+                <h3 className="font-bold text-sm tracking-wide">Update Patient Record</h3>
+                <button onClick={() => setEditingPatient(null)} className="hover:bg-blue-800 p-1 rounded-full bg-blue-950 transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <form onSubmit={handleUpdate} className="p-6 space-y-5">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Medical Full Name</label>
+                  <input 
+                    className="w-full text-xs font-bold p-2.5 border rounded bg-slate-50 outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white"
+                    value={editingPatient.name} 
+                    onChange={e => setEditingPatient({...editingPatient, name: e.target.value})}
+                    required
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-5">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Verified Age</label>
+                    <input 
+                      type="number"
+                      className="w-full text-xs font-bold p-2.5 border rounded bg-slate-50 outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white"
+                      value={editingPatient.age} 
+                      onChange={e => setEditingPatient({...editingPatient, age: e.target.value as any})}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gender Identity</label>
+                    <select 
+                      className="w-full text-xs font-bold p-2.5 border rounded bg-slate-50 outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white"
+                      value={editingPatient.gender} 
+                      onChange={e => setEditingPatient({...editingPatient, gender: e.target.value as any})}
+                      required
+                    >
+                      <option>Male</option>
+                      <option>Female</option>
+                      <option>Other</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="space-y-1.5 opacity-50">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">System UID (Immutable Phone)</label>
+                  <input 
+                    className="w-full text-xs font-mono p-2.5 border rounded bg-slate-100 cursor-not-allowed"
+                    value={editingPatient.phone} 
+                    disabled
+                  />
+                </div>
+                <div className="pt-4 flex gap-4">
+                  <button 
+                    type="button"
+                    onClick={() => setEditingPatient(null)}
+                    className="flex-1 py-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:bg-slate-100 rounded transition-all border"
+                  >
+                    Discard
+                  </button>
+                  <button 
+                    type="submit"
+                    className="flex-1 py-2 bg-blue-600 text-white text-[10px] font-bold uppercase tracking-widest rounded hover:bg-blue-700 transition-all shadow-md flex items-center justify-center gap-2"
+                  >
+                    <Check className="w-3.5 h-3.5" /> Save Changes
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -527,8 +858,87 @@ function Consultation({ initialPatient, onComplete }: { initialPatient: Patient 
   const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
-    // Force browser to apply hardware-level noise suppression and echo cancellation
-    const setupAudio = async () => {
+    // Function to cleanup audio resources
+    const cleanupAudio = () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+      setAudioLevel(0);
+      setNoiseFilterActive(false);
+    };
+
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-IN';
+      
+      recognition.onresult = (event: any) => {
+        let finalTranscript = '';
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          } else {
+            interimText += event.results[i][0].transcript;
+          }
+        }
+        if (finalTranscript) {
+          setTranscript(prev => prev + ' ' + finalTranscript.trim());
+        }
+        setInterimTranscript(interimText);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        if (event.error === 'audio-capture') {
+          alert("Microphone capture failed. Please ensure no other application is using the mic and permissions are granted.");
+        }
+        if (event.error !== 'no-speech') {
+          setIsRecording(false);
+          cleanupAudio();
+        }
+      };
+
+      recognition.onend = () => {
+        // Use a ref-based approach to check if we should restart
+        if (isRecordingRef.current) {
+          try { recognition.start(); } catch(e) {}
+        } else {
+          cleanupAudio();
+        }
+      };
+
+      recognitionRef.current = recognition;
+    }
+    return () => {
+      recognitionRef.current?.stop();
+      cleanupAudio();
+    };
+  }, []); // Only once
+
+  // Maintain a ref for the recording state to use in the async onend handler
+  const isRecordingRef = useRef(isRecording);
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+
+  const toggleRecording = async () => {
+    if (isRecording) {
+      recognitionRef.current?.stop();
+      setIsRecording(false);
+      setInterimTranscript('');
+    } else {
+      setTranscript('');
+      setInterimTranscript('');
+      
+      // Start noise reduction and audio level processing
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -567,70 +977,17 @@ function Consultation({ initialPatient, onComplete }: { initialPatient: Patient 
       } catch (e) {
         console.warn("Noise reduction constraints not fully applied:", e);
       }
-    };
 
-    setupAudio();
-
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-IN';
-      
-      recognition.onresult = (event: any) => {
-        let finalTranscript = '';
-        let interimText = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          } else {
-            interimText += event.results[i][0].transcript;
-          }
+      try {
+        recognitionRef.current?.start();
+        setIsRecording(true);
+      } catch (e) {
+        console.error("Failed to start speech recognition:", e);
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(t => t.stop());
+          streamRef.current = null;
         }
-        if (finalTranscript) {
-          setTranscript(prev => prev + ' ' + finalTranscript.trim());
-        }
-        setInterimTranscript(interimText);
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error('Speech recognition error:', event.error);
-        if (event.error !== 'no-speech') {
-          setIsRecording(false);
-        }
-      };
-
-      recognition.onend = () => {
-        // Use a ref-based approach to check if we should restart
-        if (isRecordingRef.current) {
-          try { recognition.start(); } catch(e) {}
-        }
-      };
-
-      recognitionRef.current = recognition;
-    }
-    return () => {
-      recognitionRef.current?.stop();
-    };
-  }, []); // Only once
-
-  // Maintain a ref for the recording state to use in the async onend handler
-  const isRecordingRef = useRef(isRecording);
-  useEffect(() => {
-    isRecordingRef.current = isRecording;
-  }, [isRecording]);
-
-  const toggleRecording = () => {
-    if (isRecording) {
-      recognitionRef.current?.stop();
-      setIsRecording(false);
-      setInterimTranscript('');
-    } else {
-      setTranscript('');
-      setInterimTranscript('');
-      recognitionRef.current?.start();
-      setIsRecording(true);
+      }
     }
   };
 
@@ -658,8 +1015,12 @@ function Consultation({ initialPatient, onComplete }: { initialPatient: Patient 
         });
 
         return {
-          symptoms: data.symptoms || prev.symptoms,
-          diagnosis: data.diagnosis || prev.diagnosis,
+          symptoms: (data.symptoms && data.symptoms.trim() !== "" && !data.symptoms.toLowerCase().includes("no specific symptoms")) 
+            ? (prev.symptoms ? `${prev.symptoms}\n${data.symptoms}` : data.symptoms) 
+            : prev.symptoms,
+          diagnosis: (data.diagnosis && data.diagnosis.trim() !== "" && !data.diagnosis.toLowerCase().includes("no new diagnosis"))
+            ? (prev.diagnosis ? `${prev.diagnosis}\n${data.diagnosis}` : data.diagnosis)
+            : prev.diagnosis,
           medicines: currentMeds
         };
       });

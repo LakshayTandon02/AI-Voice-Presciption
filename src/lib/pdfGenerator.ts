@@ -132,10 +132,10 @@ export const generateProfessionalPDF = (patient: Patient, extracted: ExtractedPr
   doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
   doc.text('__________________________', pageWidth - margin - 50, finalY);
-  doc.text('Authorized Signature', pageWidth - margin - 45, finalY + 7);
+  doc.text('Dr. Deepak', pageWidth - margin - 45, finalY + 7);
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(8);
-  doc.text('Digital Signature of Dr. S. Sharma', pageWidth - margin - 48, finalY + 12);
+  doc.text('Authorized Medical Officer', pageWidth - margin - 48, finalY + 12);
 
   // DISCLAIMER
   doc.setFont('helvetica', 'normal');
