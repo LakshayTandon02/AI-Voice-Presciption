@@ -88,19 +88,34 @@ export default function App() {
       setUser(currentUser);
     });
 
+    return () => unsubscribeAuth();
+  }, []);
+
+  useEffect(() => {
     // Real-time Dashboard Monitoring
+    if (!user) {
+      setPatients([]);
+      setStats({ totalPatients: 0, todayVisits: 0, totalRevenue: 0 });
+      setChartData([]);
+      return;
+    }
+
     const unsubs: (() => void)[] = [];
     
-    // Total Patients Listener
-    const pUnsub = onSnapshot(collection(db, 'patients'), (snapshot) => {
+    // Total Patients Listener - filtered by creatorId to satisfy security rules
+    const pQuery = query(collection(db, 'patients'), where('creatorId', '==', user.uid));
+    const pUnsub = onSnapshot(pQuery, (snapshot) => {
       const pList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Patient));
       setPatients(pList);
       setStats(prev => ({ ...prev, totalPatients: snapshot.size }));
+    }, (error) => {
+      console.error("Patients snapshot error:", error);
     });
     unsubs.push(pUnsub);
 
-    // Visits & Revenue Listener
-    const vUnsub = onSnapshot(collection(db, 'visits'), (snapshot) => {
+    // Visits & Revenue Listener - filtered by creatorId
+    const vQuery = query(collection(db, 'visits'), where('creatorId', '==', user.uid));
+    const vUnsub = onSnapshot(vQuery, (snapshot) => {
       const visits = snapshot.docs.map(doc => doc.data());
       const todayStr = new Date().toISOString().split('T')[0];
       
@@ -124,6 +139,7 @@ export default function App() {
           d.setHours(d.getHours() - (7 - i) * 3);
           const hourLabel = d.getHours() + ":00";
           const count = visits.filter(v => {
+            if (!v.date) return false;
             const vDate = new Date(v.date);
             return vDate >= new Date(d.getTime() - 1.5 * 60 * 60 * 1000) && 
                    vDate < new Date(d.getTime() + 1.5 * 60 * 60 * 1000);
@@ -137,7 +153,7 @@ export default function App() {
           d.setDate(d.getDate() - (6 - i));
           const dateStr = d.toISOString().split('T')[0];
           const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
-          const dayVisits = visits.filter(v => v.date.startsWith(dateStr)).length;
+          const dayVisits = visits.filter(v => v.date && v.date.startsWith(dateStr)).length;
           return { name: dayName, visits: dayVisits, revenue: dayVisits * 200 };
         });
       } else if (timeRange === 'Month') {
@@ -147,6 +163,7 @@ export default function App() {
           d.setDate(d.getDate() - (3 - i) * 7);
           const label = `Week ${i + 1}`;
           const weekVisits = visits.filter(v => {
+            if (!v.date) return false;
             const vDate = new Date(v.date);
             const start = new Date(d.getTime() - 3.5 * 24 * 60 * 60 * 1000);
             const end = new Date(d.getTime() + 3.5 * 24 * 60 * 60 * 1000);
@@ -160,6 +177,7 @@ export default function App() {
           const d = new Date(now.getFullYear(), now.getMonth() - (11 - i), 1);
           const monthLabel = d.toLocaleDateString('en-US', { month: 'short' });
           const monthVisits = visits.filter(v => {
+            if (!v.date) return false;
             const vDate = new Date(v.date);
             return vDate.getMonth() === d.getMonth() && vDate.getFullYear() === d.getFullYear();
           }).length;
@@ -168,14 +186,15 @@ export default function App() {
       }
       
       setChartData(aggregatedData);
+    }, (error) => {
+      console.error("Visits snapshot error:", error);
     });
     unsubs.push(vUnsub);
 
     return () => {
-      unsubscribeAuth();
       unsubs.forEach(u => u());
     };
-  }, [timeRange]);
+  }, [timeRange, user]);
 
   const handleLogin = async () => {
     try {
@@ -233,7 +252,14 @@ export default function App() {
           ].map((item) => (
             <button
               key={item.id}
-              onClick={() => { setActiveTab(item.id as Tab); setSidebarOpen(false); }}
+              onClick={() => { 
+                if (!user && item.id !== 'dashboard' && item.id !== 'chat') {
+                  alert("Please sign in as Dr. Deepak to access patient data.");
+                  return;
+                }
+                setActiveTab(item.id as Tab); 
+                setSidebarOpen(false); 
+              }}
               className={cn(
                 "w-full flex items-center gap-3 px-3 py-2 rounded text-xs font-medium transition-all duration-200",
                 activeTab === item.id 
@@ -1298,15 +1324,24 @@ function PatientHistory({ patient, onBack }: { patient: Patient, onBack: () => v
   }, [patient]);
 
   const fetchHistory = async () => {
+    if (!auth.currentUser) return;
     setLoading(true);
     try {
-      const vq = query(collection(db, 'visits'), where('patientPhone', '==', patient.phone));
+      const vq = query(
+        collection(db, 'visits'), 
+        where('patientPhone', '==', patient.phone),
+        where('creatorId', '==', auth.currentUser.uid)
+      );
       const vSnapshot = await getDocs(vq);
       const visits = vSnapshot.docs
         .map(doc => ({ id: doc.id, ...doc.data() } as Visit))
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-      const pq = query(collection(db, 'prescriptions'), where('patientPhone', '==', patient.phone));
+      const pq = query(
+        collection(db, 'prescriptions'), 
+        where('patientPhone', '==', patient.phone),
+        where('creatorId', '==', auth.currentUser.uid)
+      );
       const pSnapshot = await getDocs(pq);
       const prescriptions = pSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Prescription));
 
